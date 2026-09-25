@@ -1,0 +1,13 @@
+package com.github.lisama569.delivery.domain;
+
+/** 可区分的失败原因。 */
+public enum FailureReason {
+    PLAN_NOT_FOUND,
+    DUPLICATE_PLAN,
+    CONFLICTING_SUBMISSION,
+    INVALID_WEIGHT,
+    ILLEGAL_TRANSITION,
+    PLAN_ALREADY_FINISHED,
+    INSUFFICIENT_SAMPLES,
+    WINDOW_NOT_CLOSED
+}
