@@ -1,55 +1,111 @@
 package com.github.lisama569.delivery.service;
 
+import com.github.lisama569.delivery.domain.ConflictRecord;
 import com.github.lisama569.delivery.domain.DecisionRecord;
 import com.github.lisama569.delivery.domain.FailureReason;
 import com.github.lisama569.delivery.domain.HealthRules;
 import com.github.lisama569.delivery.domain.MetricSample;
 import com.github.lisama569.delivery.domain.OperationResult;
+import com.github.lisama569.delivery.domain.PlanSpec;
 import com.github.lisama569.delivery.domain.PlanState;
 import com.github.lisama569.delivery.domain.ReleasePlan;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * 发布计划编排。所有状态变更在计划对象上同步，保证并发推进/中止结果一致；
- * 创建按 planId 幂等：同规格重复提交返回已有计划，不同规格标记冲突不覆盖。
+ * 创建按 planId 幂等：整份规格（specVersion、阶段权重、显式规则、绑定规则版本）完全一致
+ * 才算重复提交并幂等返回；任意一处不同即标记冲突、留痕可查，原计划不覆盖。
+ * 受支持规格版本范围 [MIN_SUPPORTED_SPEC_VERSION, MAX_SUPPORTED_SPEC_VERSION]，
+ * 范围外创建请求一律以 UNSUPPORTED_SPEC_VERSION 拒绝。
  */
 @Service
 public class PlanService {
 
-    private final ConcurrentHashMap<String, ReleasePlan> plans = new ConcurrentHashMap<>();
-    private final HealthGate healthGate;
+    /** 受支持规格版本下限（含）。 */
+    public static final int MIN_SUPPORTED_SPEC_VERSION = 1;
+    /** 受支持规格版本上限（含），即当前版本。 */
+    public static final int MAX_SUPPORTED_SPEC_VERSION = ReleasePlan.CURRENT_SPEC_VERSION;
 
+    private final ConcurrentHashMap<String, ReleasePlan> plans = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, List<ConflictRecord>> conflicts = new ConcurrentHashMap<>();
+    private final HealthGate healthGate;
+    private final RuleVersionRegistry ruleRegistry;
+
+    /** 便捷构造：自带独立规则注册表（测试与本地复现用）。 */
     public PlanService(HealthGate healthGate) {
+        this(healthGate, new RuleVersionRegistry());
+    }
+
+    @Autowired
+    public PlanService(HealthGate healthGate, RuleVersionRegistry ruleRegistry) {
         this.healthGate = healthGate;
+        this.ruleRegistry = ruleRegistry;
+    }
+
+    public RuleVersionRegistry ruleRegistry() {
+        return ruleRegistry;
+    }
+
+    /** 兼容入口：不绑定规则版本。 */
+    public OperationResult<ReleasePlan> createPlan(String planId, int specVersion,
+                                                   List<Integer> stageWeights, HealthRules rules) {
+        return createPlan(planId, specVersion, stageWeights, rules, null);
     }
 
     public OperationResult<ReleasePlan> createPlan(String planId, int specVersion,
-                                                   List<Integer> stageWeights, HealthRules rules) {
+                                                   List<Integer> stageWeights, HealthRules rules,
+                                                   String ruleVersion) {
+        if (specVersion < MIN_SUPPORTED_SPEC_VERSION || specVersion > MAX_SUPPORTED_SPEC_VERSION) {
+            return OperationResult.fail(FailureReason.UNSUPPORTED_SPEC_VERSION,
+                    "规格版本超出受支持范围 [" + MIN_SUPPORTED_SPEC_VERSION + ", "
+                            + MAX_SUPPORTED_SPEC_VERSION + "]: " + specVersion);
+        }
         FailureReason weightError = validateWeights(stageWeights);
         if (weightError != null) {
             return OperationResult.fail(weightError, "非法权重序列: " + stageWeights);
         }
-        HealthRules effective = HealthRules.forSpecVersion(specVersion, rules);
-        ReleasePlan candidate = new ReleasePlan(planId, specVersion, stageWeights, effective, Instant.now());
+        HealthRules effective;
+        if (ruleVersion != null) {
+            Optional<HealthRules> bound = ruleRegistry.find(ruleVersion);
+            if (bound.isEmpty()) {
+                return OperationResult.fail(FailureReason.RULE_VERSION_NOT_FOUND,
+                        "规则版本不存在: " + ruleVersion);
+            }
+            // 锁定：取登记时的内容作为快照，之后注册表调整不影响本计划
+            effective = bound.get();
+        } else {
+            effective = HealthRules.forSpecVersion(specVersion, rules);
+        }
+        PlanSpec submitted = new PlanSpec(specVersion, stageWeights, rules, ruleVersion);
+        ReleasePlan candidate = new ReleasePlan(planId, submitted, effective, Instant.now());
         ReleasePlan existing = plans.putIfAbsent(planId, candidate);
         if (existing == null) {
             return OperationResult.ok(candidate);
         }
         synchronized (existing) {
-            if (sameSpec(existing, specVersion, stageWeights)) {
-                // 幂等：重复提交同一计划不重复生效
+            if (existing.getSpec().equals(submitted)) {
+                // 幂等：整份规格完全一致的重复提交不重复生效
                 return OperationResult.ok(existing);
             }
-            // 冲突：明确标记，不静默覆盖
+            // 冲突：明确标记并留痕，不静默覆盖；并发下只有先到的规格生效
             existing.markConflict();
+            ConflictRecord record = new ConflictRecord(planId, existing.getSpec(), submitted, Instant.now());
+            conflicts.computeIfAbsent(planId, k -> new CopyOnWriteArrayList<>()).add(record);
             return OperationResult.fail(FailureReason.CONFLICTING_SUBMISSION,
-                    "计划 " + planId + " 已存在且规格不同，已标记冲突");
+                    "计划 " + planId + " 已存在且规格不同，已标记冲突并留痕");
         }
+    }
+
+    /** 查询某计划的全部冲突留痕（按发生顺序）。 */
+    public List<ConflictRecord> getConflicts(String planId) {
+        return List.copyOf(conflicts.getOrDefault(planId, List.of()));
     }
 
     public OperationResult<ReleasePlan> start(String planId) {
@@ -193,10 +249,6 @@ public class PlanService {
     private OperationResult<ReleasePlan> transitionError(ReleasePlan plan, PlanState required) {
         return OperationResult.fail(FailureReason.ILLEGAL_TRANSITION,
                 "非法状态跳转: 当前=" + plan.getState() + ", 要求=" + required);
-    }
-
-    private boolean sameSpec(ReleasePlan plan, int specVersion, List<Integer> stageWeights) {
-        return plan.getSpecVersion() == specVersion && plan.getStageWeights().equals(stageWeights);
     }
 
     /** 权重约束：非空，每个在 (0,100]，严格递增，末阶段=100。 */

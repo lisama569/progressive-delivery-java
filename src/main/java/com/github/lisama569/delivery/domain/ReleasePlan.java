@@ -9,12 +9,15 @@ import java.util.List;
  */
 public class ReleasePlan {
 
-    public static final int CURRENT_SPEC_VERSION = 2;
+    /** 当前规格版本：V3 起支持绑定规则版本；受支持范围见 PlanService。 */
+    public static final int CURRENT_SPEC_VERSION = 3;
 
     private final String planId;
     private final int specVersion;
     private final List<Integer> stageWeights;
     private final HealthRules healthRules;
+    private final String ruleVersion;
+    private final PlanSpec spec;
     private final Instant createdAt;
 
     private PlanState state = PlanState.DRAFT;
@@ -26,10 +29,25 @@ public class ReleasePlan {
     private final List<Integer> judgedStages = new ArrayList<>();
 
     public ReleasePlan(String planId, int specVersion, List<Integer> stageWeights, HealthRules healthRules, Instant createdAt) {
+        this(planId, specVersion, stageWeights, healthRules, null, createdAt);
+    }
+
+    public ReleasePlan(String planId, int specVersion, List<Integer> stageWeights, HealthRules healthRules,
+                       String ruleVersion, Instant createdAt) {
+        this(planId, new PlanSpec(specVersion, stageWeights, healthRules, ruleVersion), healthRules, createdAt);
+    }
+
+    /**
+     * @param submittedSpec  提交时的原始规格（用于幂等/冲突判定）
+     * @param effectiveRules 解析后的生效规则（锁定快照，后续判定与回退都按它走）
+     */
+    public ReleasePlan(String planId, PlanSpec submittedSpec, HealthRules effectiveRules, Instant createdAt) {
         this.planId = planId;
-        this.specVersion = specVersion;
-        this.stageWeights = List.copyOf(stageWeights);
-        this.healthRules = healthRules;
+        this.specVersion = submittedSpec.specVersion();
+        this.stageWeights = List.copyOf(submittedSpec.stageWeights());
+        this.healthRules = effectiveRules;
+        this.ruleVersion = submittedSpec.ruleVersion();
+        this.spec = submittedSpec;
         this.createdAt = createdAt;
     }
 
@@ -37,6 +55,8 @@ public class ReleasePlan {
     public int getSpecVersion() { return specVersion; }
     public List<Integer> getStageWeights() { return stageWeights; }
     public HealthRules getHealthRules() { return healthRules; }
+    public String getRuleVersion() { return ruleVersion; }
+    public PlanSpec getSpec() { return spec; }
     public Instant getCreatedAt() { return createdAt; }
     public PlanState getState() { return state; }
     public void setState(PlanState state) { this.state = state; }

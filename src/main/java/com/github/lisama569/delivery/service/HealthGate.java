@@ -40,6 +40,6 @@ public class HealthGate {
             verdict = DecisionRecord.Verdict.ADVANCE;
         }
         return new DecisionRecord(plan.getPlanId(), plan.getCurrentStageIndex(), verdict,
-                rules, count, errorRate, maxLatency, Instant.ofEpochMilli(nowMillis));
+                rules, plan.getRuleVersion(), count, errorRate, maxLatency, Instant.ofEpochMilli(nowMillis));
     }
 }

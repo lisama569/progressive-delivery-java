@@ -1,5 +1,6 @@
 package com.github.lisama569.delivery.api;
 
+import com.github.lisama569.delivery.domain.ConflictRecord;
 import com.github.lisama569.delivery.domain.HealthRules;
 import com.github.lisama569.delivery.domain.OperationResult;
 import com.github.lisama569.delivery.domain.ReleasePlan;
@@ -27,7 +28,7 @@ public class PlanController {
     }
 
     public record CreateRequest(String planId, Integer specVersion, List<Integer> stageWeights,
-                                HealthRules healthRules) {
+                                HealthRules healthRules, String ruleVersion) {
     }
 
     public record MetricRequest(boolean error, long latencyMillis, long timestampMillis) {
@@ -39,7 +40,8 @@ public class PlanController {
                 req.planId(),
                 req.specVersion() == null ? 1 : req.specVersion(),
                 req.stageWeights(),
-                req.healthRules()));
+                req.healthRules(),
+                req.ruleVersion()));
     }
 
     @PostMapping("/{id}/start")
@@ -87,6 +89,13 @@ public class PlanController {
                         .body(Map.of("reason", "PLAN_NOT_FOUND", "planId", id)));
     }
 
+    /** 冲突留痕查询：该计划标识下所有被拒绝的冲突提交。 */
+    @GetMapping("/{id}/conflicts")
+    public ResponseEntity<?> conflicts(@PathVariable String id) {
+        List<ConflictRecord> records = planService.getConflicts(id);
+        return ResponseEntity.ok(Map.of("planId", id, "conflicts", records));
+    }
+
     private ResponseEntity<?> toResponse(OperationResult<ReleasePlan> result) {
         if (result.ok()) {
             return ResponseEntity.ok(toView(result.value()));
@@ -99,6 +108,7 @@ public class PlanController {
         return Map.of(
                 "planId", p.getPlanId(),
                 "specVersion", p.getSpecVersion(),
+                "ruleVersion", p.getRuleVersion() == null ? "" : p.getRuleVersion(),
                 "state", p.getState().name(),
                 "stageIndex", p.getCurrentStageIndex(),
                 "currentWeight", p.currentWeight(),
