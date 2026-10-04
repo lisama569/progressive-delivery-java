@@ -11,6 +11,7 @@ public record DecisionRecord(
         int stageIndex,
         Verdict verdict,
         HealthRules rulesSnapshot,
+        String ruleVersion,
         int sampleCount,
         double errorRate,
         long maxLatencyMillis,

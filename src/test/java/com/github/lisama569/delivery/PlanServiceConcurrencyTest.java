@@ -6,6 +6,7 @@ import com.github.lisama569.delivery.domain.PlanState;
 import com.github.lisama569.delivery.domain.ReleasePlan;
 import com.github.lisama569.delivery.service.HealthGate;
 import com.github.lisama569.delivery.service.PlanService;
+import com.github.lisama569.delivery.service.RuleRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -22,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class PlanServiceConcurrencyTest {
 
     private PlanService newService() {
-        return new PlanService(new HealthGate());
+        return new PlanService(new HealthGate(), new RuleRegistry());
     }
 
     @Test

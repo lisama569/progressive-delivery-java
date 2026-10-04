@@ -10,11 +10,15 @@ import java.util.List;
 public class ReleasePlan {
 
     public static final int CURRENT_SPEC_VERSION = 2;
+    /** 受支持的计划版本范围：[MIN, MAX]，超出范围的创建请求必须被拒绝。 */
+    public static final int MIN_SUPPORTED_SPEC_VERSION = 1;
+    public static final int MAX_SUPPORTED_SPEC_VERSION = CURRENT_SPEC_VERSION;
 
     private final String planId;
     private final int specVersion;
     private final List<Integer> stageWeights;
     private final HealthRules healthRules;
+    private final String ruleVersion;
     private final Instant createdAt;
 
     private PlanState state = PlanState.DRAFT;
@@ -26,17 +30,29 @@ public class ReleasePlan {
     private final List<Integer> judgedStages = new ArrayList<>();
 
     public ReleasePlan(String planId, int specVersion, List<Integer> stageWeights, HealthRules healthRules, Instant createdAt) {
+        this(planId, specVersion, stageWeights, healthRules, null, createdAt);
+    }
+
+    public ReleasePlan(String planId, int specVersion, List<Integer> stageWeights,
+                       HealthRules healthRules, String ruleVersion, Instant createdAt) {
         this.planId = planId;
         this.specVersion = specVersion;
         this.stageWeights = List.copyOf(stageWeights);
         this.healthRules = healthRules;
+        this.ruleVersion = ruleVersion;
         this.createdAt = createdAt;
+    }
+
+    /** 创建时的完整规格快照，用于幂等/冲突判定。 */
+    public PlanSpec spec() {
+        return new PlanSpec(specVersion, stageWeights, ruleVersion, healthRules);
     }
 
     public String getPlanId() { return planId; }
     public int getSpecVersion() { return specVersion; }
     public List<Integer> getStageWeights() { return stageWeights; }
     public HealthRules getHealthRules() { return healthRules; }
+    public String getRuleVersion() { return ruleVersion; }
     public Instant getCreatedAt() { return createdAt; }
     public PlanState getState() { return state; }
     public void setState(PlanState state) { this.state = state; }
